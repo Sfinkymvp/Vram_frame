@@ -1,0 +1,400 @@
+.model tiny
+.code
+org 100h
+
+locals @@
+
+BUFFER_SIZE                 equ 128d
+VIDEO_MEMORY_START          equ 0B800h
+SEGMENT_PREFIX_START        equ 80h
+
+SCREEN_SIZE_X               equ 80d
+SCREEN_SIZE_Y               equ 25d
+START_X                     equ 40d
+START_Y                     equ 12d
+
+ROW_OFFSET                  equ 2d
+LINE_OFFSET                 equ SCREEN_SIZE_X * ROW_OFFSET
+PICTURE_OFFSET              equ (SCREEN_SIZE_X * START_Y + START_X) * ROW_OFFSET
+
+HORIZONTAL_FRAME_SIDE       equ 0CDh
+VERTICAL_FRAME_SIDE         equ 0BAh
+
+UPPER_LEFT_FRAME_CORNER     equ 0C9h
+UPPER_RIGHT_FRAME_CORNER    equ 0BBh
+LOWER_LEFT_FRAME_CORNER     equ 0C8h
+LOWER_RIGHT_FRAME_CORNER    equ 0BCh
+
+SYMBOL_ATTRIBUTE            equ 00000111b
+FRAME_ATTRIBUTE             equ 00001111b
+
+Main:    
+        sub sp, BUFFER_SIZE                     
+        ; Создаем буфер для ввода
+        ; Структура буфера:
+        ; [0] - Размер доступной части буфера
+        ; [1] - Длина записанной в него строки
+        ; [Остальные элементы] - символы в полученной строке
+
+        mov bx, sp                              ; Перемещаем указатель на буфер
+        mov byte ptr [bx], BUFFER_SIZE - 2d     ; Кладем в первую ячейку буфера длину части для введенных данных
+
+        ; Очистка экрана
+        mov ax, 0600h                           ; 06 - Номер функции и 00 - очистить все окно
+        mov bh, SYMBOL_ATTRIBUTE                ; Атрибут заполнения
+        mov cx, 0000h                           ; Верхний левый угол (Line:0, Row:0)
+        mov dx, 184Fh                           ; Нижний правый угол (Line:24, Row:79)
+        int 10h
+
+        call ParseArguments                     ; Парсим строку аргументов
+
+        push bx                                 ; Передаем указатель на буфер в функцию 
+        call ReadString                         ; Вызываем функцию для считывания строки
+
+        push bx
+        push SYMBOL_ATTRIBUTE                   ; Передаем аттрибут символа в функцию
+        push FRAME_ATTRIBUTE                    ; Передаем аттрибут рамки в функцию
+        call DrawPicture
+
+        add sp, BUFFER_SIZE                     ; Очищаем место под буфер в стеке
+        jmp Exit                                ; Идем к месту выхода из программы
+
+Exit:
+        mov ax, 4c00h       
+        int 21h                                 ; Завершаем работу программы
+
+ParseArguments proc
+        push bp                                 ; Сохраняем старый bp
+        mov bp, sp                              ; Создаем кадр стека
+        push si di
+
+        mov si, SEGMENT_PREFIX_START            ; Загружаем адрес длины строки аргументов
+        mov cl, [si]                            ; Читаем длину
+        cmp cl, 1                               ; Если длина 0 или 1 байт, то полезных данных (со 2 байта) нет
+        jbe @@exit                              ; Выходим
+
+        mov si, SEGMENT_PREFIX_START + 2d       ; Стартуем со 2 символа
+        lea di, FrameChars                      ; Указатель на наш массив
+        mov cx, FRAME_CHARS_COUNT               ; Читаем максимум 6 символов
+
+@@loop:
+        mov al, [si]                            ; Читаем символ из аргументов
+        cmp al, 0Dh                             ; Сравниваем символ с кодом возврата каретки
+        je @@exit                               ; Если строка кончилась раньше времени - выход
+
+        cmp al, 20h                             ; Проверяем на пробел
+        je @@skip_write                         ; Если пробел - пропускаем запись (оставляем старое значение)
+
+        mov [di], al                            ; Если не пробел - пишем в массив
+@@skip_write:
+        inc si                                  ; Следующий символ в командной строке
+        inc di                                  ; Следующая ячейка в нашем массиве
+        loop @@loop                             ; Повторяем цикл
+
+@@exit:
+        pop di si
+        pop bp                                  ; Восстанавливаем старый bp
+        ret 2                                   ; Возвращаемся и очищаем стек
+ParseArguments endp
+
+; Параметры
+; bp + 4 - указатель на буфер
+ReadString proc
+        push bp                                 ; Сохраняем старый bp
+        mov bp, sp                              ; Создаем кадр стека
+
+        mov dx, [bp + 4]                        ; Загружаем адрес буфера
+        mov ah, 0Ah
+        int 21h                                 ; Системный вызов буферизированного ввода 
+
+        pop bp                                  ; Восстанавливаем старый bp
+        ret 2                                   ; Возвращаемся и очищаем стек
+ReadString endp
+
+; Параметры
+; bp + 8 - указатель на буфер
+; bp + 6 - аттрибут символа строки
+; bp + 4 - аттрибут символа рамки
+DrawPicture proc
+        push bp                                 ; Сохраняем старый bp
+        mov bp, sp                              ; Создаем кадр стека
+        push bx 
+
+        mov bx, [bp + 8]                        ; Сохраняем указатель на буфер
+
+        push bx                                 ; Передаем указатель на буфер в функцию (В стиле Pascal)
+        push [bp + 6]                           ; Передаем аттрибут символа в функцию (В стиле Pascal)
+        call PrintText
+
+        xor ax, ax
+        mov al, [bx + 1]                        ; Записываем длину записанной в буфер строки
+
+        push [bp + 4]
+        push ax
+        call PrintFrame
+
+        pop bx
+        pop bp                                  ; Восстанавливаем старый bp
+        ret 6                                   ; Возвращаемся и очищаем стек
+DrawPicture endp
+
+; Параметры
+; bp + 6 - указатель на буфер
+; bp + 4 - аттрибут символа строки
+PrintText proc
+        push bp                                 ; Сохраняем старый bp
+        mov bp, sp                              ; Создаем кадр стека
+        push bx si di es
+        
+        mov ax, VIDEO_MEMORY_START              ; Устанавливаем начало сегмента видеопамяти
+        mov es, ax	                        ; Загружаем указатель на начало области видеопамяти
+        mov di, PICTURE_OFFSET                  ; Загружаем смещение для вывода текста
+
+        mov bx, [bp + 6]                        ; Загружаем указатель на начало буфера
+        mov dx, [bp + 4]                        ; Загружаем аттрибут символа
+
+        xor cx, cx                              ; Обнуляем cx
+        lea si, [bx + 2]                        ; Загружаем адрес начала строки 
+        mov cl, [bx + 1]                        ; Загружаем количество символов в строке
+
+        jcxz @@exit                             ; Если cx > 0, то заходим в цикл
+@@loop: 
+        mov al, [si]                            
+        mov ah, dl
+        mov es:[di], ax                         ; Загружаем в видеопамять символ и его аттрибут
+
+        inc si                                  ; Смещаемся к следующему символу строки
+        add di, ROW_OFFSET                      ; Смещаемся на 2 байта в видеопамяти
+        loop @@loop                             ; Повторяем вывод символа
+
+@@exit: 
+        pop es di si bx
+        pop bp                                  ; Восстанавливаем старый bp
+        ret 4                                   ; Возвращаемся и очищаем стек
+PrintText endp
+
+; Параметры
+; bp + 6 - аттрибут символа рамки
+; bp + 4 - ширина текста внутри рамки
+PrintFrame proc
+        push bp                                 ; Сохраняем старый bp
+        mov bp, sp                              ; Создаем кадр стека
+        push si di
+
+        mov si, [bp + 6]                        ; Загружаем аттрибут символа рамки
+        mov di, [bp + 4]                        ; Загружаем ширину текста внутри рамки
+
+        push si
+        push di
+        call PrintVerticalFrameSide
+
+        push si
+        push di
+        call PrintHorizontalFrameSide
+
+        push si
+        push di
+        call printFrameCorners
+
+        pop di si
+        pop bp                                  ; Восстанавливаем старый bp
+        ret 4                                   ; Возвращаемся и очищаем стек
+PrintFrame endp
+
+; Параметры
+; bp + 6 - аттрибут символа рамки
+; bp + 4 - ширина текста внутри рамки
+PrintVerticalFrameSide proc
+        push bp                                 ; Сохраняем старый bp
+        mov bp, sp                              ; Создаем кадр стека
+        push bx si di
+
+        mov si, [bp + 6]                        ; Загружаем аттрибут символа рамки
+        mov di, [bp + 4]                        ; Загружаем ширину текста внутри рамки
+
+        xor bx, bx
+        mov bl, [FrameChars + I_VERT]           ; Загружаем символ вертикальной части рамки
+        push bx
+        push si
+        push PICTURE_OFFSET - ROW_OFFSET
+        push LINE_OFFSET
+        push 1d                                
+        call PrintSymbolSequence                ; Печатаем часть рамки над текстом  
+
+        mov ax, ROW_OFFSET
+        mul di
+        add ax, PICTURE_OFFSET                  ; Находим смещение для правой стороны рамки
+
+        xor bx, bx
+        mov bl, [FrameChars + I_VERT]           ; Загружаем символ вертикальной части рамки
+        push bx
+        push si
+        push ax
+        push LINE_OFFSET
+        push 1d
+        call PrintSymbolSequence                ; Печатаем часть рамки под текстом
+
+        pop di si bx
+        pop bp
+        ret 4
+PrintVerticalFrameSide endp
+
+; Параметры
+; bp + 6 - аттрибут символа рамки
+; bp + 4 - ширина текста внутри рамки
+PrintHorizontalFrameSide proc
+        push bp                                 ; Сохраняем старый bp
+        mov bp, sp                              ; Создаем кадр стека
+        push si di
+
+        mov si, [bp + 6]                        ; Загружаем аттрибут символа рамки
+        mov di, [bp + 4]                        ; Загружаем ширину текста внутри рамки
+
+        xor ax, ax
+        mov al, [FrameChars + I_HORIZ]          ; Загружаем символ горизонтальной части рамки
+        push ax
+        push si
+        push PICTURE_OFFSET - LINE_OFFSET
+        push ROW_OFFSET
+        push di
+        call PrintSymbolSequence                ; Печатаем часть рамки над текстом  
+
+        xor ax, ax
+        mov al, [FrameChars + I_HORIZ]          ; Загружаем символ горизонтальной части рамки
+        push ax
+        push si
+        push PICTURE_OFFSET + LINE_OFFSET
+        push ROW_OFFSET
+        push di
+        call PrintSymbolSequence                ; Печатаем часть рамки под текстом
+
+        pop di si
+        pop bp
+        ret 4
+
+PrintHorizontalFrameSide endp
+
+; Параметры
+; bp + 6 - аттрибут символа рамки
+; bp + 4 - ширина текста внутри рамки
+PrintFrameCorners proc
+        push bp                                 ; Сохраняем старый bp
+        mov bp, sp                              ; Создаем кадр стека
+        push bx si di
+
+        mov si, [bp + 6]                        ; Загружаем аттрибут символа рамки
+        mov di, [bp + 4]                        ; Загружаем ширину текста внутри рамки
+
+        xor ax, ax
+        mov al, [FrameChars + I_UP_LEFT]        ; Загружаем символ верхнего левого угла рамки
+        push ax
+        push si
+        push PICTURE_OFFSET - LINE_OFFSET - ROW_OFFSET
+        call PrintSymbol
+
+        xor ax, ax
+        mov al, [FrameChars + I_LOW_LEFT]       ; Загружаем символ нижнего левого угла рамки
+        push ax
+        push si
+        push PICTURE_OFFSET + LINE_OFFSET - ROW_OFFSET
+        call PrintSymbol
+
+        mov ax, ROW_OFFSET
+        mul di
+        add ax, PICTURE_OFFSET - LINE_OFFSET    ; Находим смещение для правого верхнего угла рамки
+
+        xor bx, bx
+        mov bl, [FrameChars + I_UP_RIGHT]       ; Загружаем символ верхнего правого угла рамки
+        push bx
+        push si
+        push ax
+        call PrintSymbol 
+
+        mov ax, ROW_OFFSET
+        mul di
+        add ax, PICTURE_OFFSET + LINE_OFFSET    ; Находим смещение для правого нижнего угла рамки
+
+        xor bx, bx
+        mov bl, [FrameChars + I_LOW_RIGHT]      ; Загружаем символ нижнего правого угла рамки
+        push bx
+        push si
+        push ax
+        call PrintSymbol
+
+        pop di si bx
+        pop bp
+        ret 4
+
+PrintFrameCorners endp 
+
+; Параметры
+; bp + 12 - символ рамки
+; bp + 10 - аттрибут символа рамки
+; bp + 8 - смещение 
+; bp + 6 - шаг итерации
+; bp + 4 - количество итераций
+PrintSymbolSequence proc
+        push bp                                 ; Сохраняем старый bp
+        mov bp, sp                              ; Создаем кадр стека
+        push si di es
+
+        mov ax, VIDEO_MEMORY_START              
+        mov es, ax                              ; Загружаем указатель на начало области видеопамяти
+
+        mov al, [bp + 12]                       ; Загружаем символ рамки
+        mov ah, [bp + 10]                       ; Загружаем аттрибут символа рамки
+        mov di, [bp + 8]                        ; Загружаем начальное смещение в области видеопамяти
+        mov si, [bp + 6]                        ; Загружаем шаг увеличения адреса при итерации
+        mov cx, [bp + 4]                        ; Загружаем количество итераций цикла 
+
+        jcxz @@exit
+@@loop:
+        mov es:[di], ax                         ; Загружаем в видеопамять символ и его аттрибут
+        add di, si                              ; Изменяем смещение на заданную величину si
+        loop @@loop                             ; Повторяем итерацию
+@@exit:
+
+        pop es di si
+        pop bp 
+        ret 10 
+PrintSymbolSequence endp
+
+; Параметры
+; bp + 8 - символ рамки
+; bp + 6 - аттрибут символа рамки
+; bp + 4 - смещение 
+PrintSymbol proc 
+        push bp                                 ; Сохраняем старый bp
+        mov bp, sp                              ; Создаем кадр стека
+        push di es
+
+        mov ax, VIDEO_MEMORY_START
+        mov es, ax                              ; Загружаем указатель на начало области видеопамяти
+
+        mov al, [bp + 8]                        ; Загружаем символ рамки
+        mov ah, [bp + 6]                        ; Загружаем аттрибут символа рамки
+        mov di, [bp + 4]                        ; Загружаем начальное смещение в области видеопамяти
+
+        mov es:[di], ax                         ; Загружаем в видеопамять символ и его аттрибут
+
+        pop es di
+        pop bp 
+        ret 6
+PrintSymbol endp 
+
+; Символы, использующиеся в рамке
+; 0: Левый верхний, 1: Горизонталь, 2: Правый верхний
+; 3: Вертикаль, 4: Левый нижний, 5: Правый нижний
+FrameChars db UPPER_LEFT_FRAME_CORNER, HORIZONTAL_FRAME_SIDE, UPPER_RIGHT_FRAME_CORNER, \
+        VERTICAL_FRAME_SIDE, LOWER_LEFT_FRAME_CORNER, LOWER_RIGHT_FRAME_CORNER
+
+FRAME_CHARS_COUNT       equ $ - FrameChars
+I_UP_LEFT               equ 0d 
+I_HORIZ                 equ 1d 
+I_UP_RIGHT              equ 2d 
+I_VERT                  equ 3d 
+I_LOW_LEFT              equ 4d
+I_LOW_RIGHT             equ 5d
+
+end Main
+        
