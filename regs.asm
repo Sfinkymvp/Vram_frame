@@ -19,31 +19,48 @@ Start:
 
 
 Main proc
-;        xor ax, ax   
-;        mov es, ax                              ; Рассчитываем сегмент 9 прерывания
-;        mov bx, 4d * 9d                         ; Рассчитываем смещение 9 прерывания
+        xor ax, ax   
+        mov es, ax                              ; Рассчитываем сегмент 9 прерывания
+        mov bx, 4d * 9d                         ; Рассчитываем смещение 9 прерывания
 
-;        push es:[bx]                            ; Кладем в стек старое смещение 9 прерывания
-;        push es:[bx + 2]                        ; Кладем в стек старый сегмент 9 прерывания
+        mov ax, es:[bx]        
+        mov [Old09IntOffset], ax                ; Кладем в переменную старое смещение 9 прерывания
+        mov ax, es:[bx + 2]   
+        mov [Old09IntSegment], ax               ; Кладем в переменную старый сегмент 9 прерывания
 
-;        cli
-;        mov word ptr es:[bx], offset NewInt     ; Загружаем смещение нового 9 прерывания
-;        mov ax, cs
-;        mov es:[bx + 2],                        ; Загружаем сегмент нового 9 прерывания
-;        sti
+        cli
+        mov word ptr es:[bx], offset NewInt     ; Загружаем смещение нового 9 прерывания
+        mov ax, cs
+        mov es:[bx + 2], ax                     ; Загружаем сегмент нового 9 прерывания
+        sti
 
-;        mov ax, 3100h
-;        mov dx, offset EndOfProgram
-;        shr dx, 4
-;        inc dx
+        mov ax, 3100h
+        mov dx, offset EndOfProgram
+        shr dx, 4
+        inc dx
 
-        call NewInt
+        int 21h
+
+;        mov ax, 0ABCDh
+;        call NewInt
 
         ret
 Main endp
 
 
 NewInt proc
+    push ax
+    in al, 60h
+    cmp al, 38h                                 ; Alt
+    jne @@skipPrinting
+
+    push ax bx cx dx si di bp sp ds es
+    mov bp, sp
+
+    mov ax, cs 
+    mov ds, ax 
+
+    mov ax, [bp + 14]
     mov si, offset NumberBuffer
     call Itoa
 
@@ -53,10 +70,15 @@ NewInt proc
     mov si, offset AxBuffer
     call PrintString
 
+    mov ax, 0ABCDh
     mov si, offset NumberBuffer
     call PrintString
 
-    ret
+    pop es ds sp bp di si dx cx bx ax
+
+@@skipPrinting:
+    pop ax
+    jmp dword ptr cs:[Old09IntOffset]
 NewInt endp
 
 
@@ -74,7 +96,7 @@ PrintString proc
     je @@exit
 
     stosw    
-    loop @@loop
+    jmp @@loop
 @@exit:
     pop si
     ret
@@ -96,11 +118,11 @@ Itoa proc
     cmp bl, 16d
     jae @@end
     cmp bl, 10d
-    jae @@hex_chars
+    jae @@hexChars
     add bl, '0'
     jmp @@end
 
-@@hex_chars:
+@@hexChars:
     add bl, 'A' - 10d
 
 @@end:
@@ -113,8 +135,10 @@ Itoa proc
 Itoa endp
 
 
-AxBuffer     db 'AX = $'
-NumberBuffer db 4 DUP(?), '$'
+Old09IntOffset      dw ?
+Old09IntSegment     dw ?
+AxBuffer            db 'AX = $'
+NumberBuffer        db 4 DUP(?), '$'
 
 EndOfProgram:
 
