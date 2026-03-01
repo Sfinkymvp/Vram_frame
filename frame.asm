@@ -7,7 +7,7 @@ locals @@
 ; =============================================================================
 ; CONSTANTS
 ; =============================================================================
-BUFFER_SIZE                 equ 128d
+STRING_BUFFER_SIZE          equ 128d
 VIDEO_MEMORY_START          equ 0B800h
 SEGMENT_PREFIX_START        equ 80h
 
@@ -48,7 +48,7 @@ Start:
 ; Описание: 
 ;       Основная логика программы
 ; Локальные переменные:
-;       [bp - BUFFER_SIZE] -> Буфер ввода
+;       [bp - STRING_BUFFER_SIZE] -> Буфер ввода
 ; Входные параметры:
 ;       Нет
 ; Выходные данные:
@@ -61,7 +61,7 @@ Main proc
         mov bp, sp
         push bx
 
-        sub sp, BUFFER_SIZE                     
+        sub sp, STRING_BUFFER_SIZE                     
         ; Создаем буфер для ввода
         ; Структура буфера:
         ; [0] - Размер доступной части буфера
@@ -69,7 +69,7 @@ Main proc
         ; [Остальные элементы] - символы в полученной строке
 
         mov bx, sp                              ; Перемещаем указатель на буфер
-        mov byte ptr [bx], BUFFER_SIZE - 2d     ; Кладем в первую ячейку буфера длину части для введенных данных
+        mov byte ptr [bx], STRING_BUFFER_SIZE - 2d     ; Кладем в первую ячейку буфера длину части для введенных данных
         call ParseArguments                     ; Парсим строку аргументов
 
         call ClearScreen
@@ -84,7 +84,7 @@ Main proc
         add sp, 6d
 
         pop bx
-        add sp, BUFFER_SIZE                     ; Очищаем место под буфер в стеке
+        add sp, STRING_BUFFER_SIZE                     ; Очищаем место под буфер в стеке
         pop bp
         ret
 Main endp
