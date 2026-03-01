@@ -26,9 +26,12 @@ SCREEN_BUFFER_SIZE          equ SCREEN_SIZE_X * SCREEN_SIZE_Y * ROW_OFFSET
 ALT_PRESS                   equ 38h
 ALT_RELEASE                 equ ALT_PRESS + 80h
 
+FLAG_TRUE                   equ 1d
+FLAG_FALSE                  equ 0d
+
 REGISTER_COUNT              equ 7d
 REG_ENTRY_SIZE              equ 4d
-LABEL_LENGTH                equ 3d
+LABEL_STRING_LEN            equ 3d
 
 HORIZONTAL_FRAME_SIDE       equ 0CDh
 VERTICAL_FRAME_SIDE         equ 0BAh
@@ -49,81 +52,108 @@ FRAME_ATTRIBUTE             equ 00001111b
 Start:
         call Main
 
-        mov ax, 4C00h
-        int 21h
+        mov ax, 4C00h                                   
+        int 21h                                 ; Завершение работы программы
 
 
+; -----------------------------------------------------------------------------
+; PROC: Main
+; -----------------------------------------------------------------------------
+; Описание:
+;       Заменяет стандартную функцию 09h прерывания модифицированной.
+; Входные параметры:
+;       Нет
+; Выходные параметры:
+;       Нет
+; Портящиеся регистры:
+;       ax, bx, es
+; -----------------------------------------------------------------------------
 Main proc
         xor ax, ax   
-        mov es, ax                              ; Рассчитываем сегмент 9 прерывания
-        mov bx, INTERRUPT_09_OFFSET             ; Рассчитываем смещение 9 прерывания
+        mov es, ax                              ; Рассчитываем сегмент 09h прерывания
+        mov bx, INTERRUPT_09_OFFSET             ; Рассчитываем смещение 09h прерывания
 
         mov ax, es:[bx]        
-        mov [Old09IntOffset], ax                ; Кладем в переменную старое смещение 9 прерывания
+        mov [Old09IntOffset], ax                ; Кладем в переменную старое смещение 09h прерывания
         mov ax, es:[bx + 2]   
-        mov [Old09IntSegment], ax               ; Кладем в переменную старый сегмент 9 прерывания
+        mov [Old09IntSegment], ax               ; Кладем в переменную старый сегмент 09h прерывания
 
         cli
-        mov word ptr es:[bx], offset New09IntFunction     ; Загружаем смещение нового 9 прерывания
+        mov word ptr es:[bx], offset New09IntFunction     ; Загружаем смещение нового 09h прерывания
         mov ax, cs
-        mov es:[bx + 2], ax                     ; Загружаем сегмент нового 9 прерывания
+        mov es:[bx + 2], ax                     ; Загружаем сегмент нового 09h прерывания
         sti
 
         mov ax, 3100h
         mov dx, offset EndOfProgram
-        shr dx, 4
-        inc dx
+        shr dx, 4                               ; Находим размер в параграфах (16 байт) кода программы
+        inc dx                                  ; Резервный параграф (против проблемы округления)
 
-        int 21h
+        int 21h                                 ; Резидентное завершение программы
 
         ret
 Main endp
 
 
+; -----------------------------------------------------------------------------
+; PROC: New09IntFunction
+; -----------------------------------------------------------------------------
+; Описание:
+;       Замена для стандартной функции 09h прерывания. Изменяет поведение 
+;       только клавиши alt. При ее нажатии выводит рамку с значениями 
+;       регистров, а при отпускании возвращает прежнее содержимое экрана.
+;       Препятствует работе любых программ, требующих нажатия клавиши alt. 
+; Входные параметры:
+;       Нет
+; Выходные параметры:
+;       Нет
+; Портящиеся регистры:
+;       Нет 
+; -----------------------------------------------------------------------------
 New09IntFunction proc
     push ax
-    in al, 60h
-    cmp al, ALT_PRESS                                 ; Scan-код нажатой клавиши Alt
-    je @@handle_press
+    in al, 60h                                  ; Читаем 60h порт
+    cmp al, ALT_PRESS                      
+    je @@handle_press                           ; Прыгаем при нажатой клавише Alt
 
-    cmp al, ALT_RELEASE                           ; Scan-код отпущенной клавиши Alt
-    je @@handle_release
+    cmp al, ALT_RELEASE                          
+    je @@handle_release                         ; Прыгаем при отпущенной клавише Alt
 
-    jmp @@std_exit
+    jmp @@std_exit                              ; Прыгаем, если работаем не с клавишей Alt
 
 @@handle_press:
-    cmp [IsVisible], 1d
-    je @@hotkey_exit
+    cmp [IsVisible], FLAG_TRUE
+    je @@hotkey_exit                            ; Если регистры выведены - пропустить повторный вывод
 
     pop ax
     push ax
-    call SaveScreen                                        ; Сохранение старого окна
-    call PrintRegs
-    mov [IsVisible], 1d
+    call SaveScreen                             ; Сохраняем старое окно
+    call PrintRegs                              ; Выводим регистры
+    mov [IsVisible], FLAG_TRUE      
     jmp @@hotkey_exit 
 
 @@handle_release:
-    cmp [IsVisible], 0d
-    je @@hotkey_exit
+    cmp [IsVisible], FLAG_FALSE
+    je @@hotkey_exit                            ; Если регистры не выведены - пропускаем возврат содержимого окна
 
-    call RestoreScreen                                       ; Возврат старого окна
-    mov [IsVisible], 0d
+    call RestoreScreen                          ; Возврат содержимого окна
+    mov [IsVisible], FLAG_FALSE
     jmp @@hotkey_exit
 
 @@hotkey_exit:
-    in al, 61h
-    mov ah, al 
-    or al, 80h
-    out 61h, al
-    xchg ah, al
-    out 61h, al
+    in al, 61h                                  ; Читаем порт управления динамиком и клавиатурой
+    mov ah, al                                  ; Сохраняем значение al, чтобы позже вернуть его
+    or al, 80h                                  ; Устанавливаем в 1 самый старший бит, чтобы подтвердить
+;                                                 прием scan-кода
+    out 61h, al                                 ; Отправляем измененное значение обратно в порт
+    xchg ah, al                                 ; Возвращаем в al исходное состояние порта
+    out 61h, al                                 ; Отправляем в порт исходное значение 
 
-    mov al, 20h
-    out 20h, al
+    mov al, 20h                                 ; Загружаем код команды EOI (End Of Interrupt)
+    out 20h, al                                 ; Отправляем команду в контроллер прерываний (порт 20h)
 
     pop ax
     iret
-
 @@std_exit:
     pop ax
 
@@ -131,6 +161,18 @@ New09IntFunction proc
 New09IntFunction endp
 
 
+; -----------------------------------------------------------------------------
+; PROC: PrintRegs
+; -----------------------------------------------------------------------------
+; Описание:
+;       Выводит в видеопамять содержимое регистров в рамке
+; Входные параметры:
+;       Нет
+; Выходные параметры:
+;       Нет
+; Портящиеся регистры:
+;       Нет 
+; -----------------------------------------------------------------------------
 PrintRegs proc
     push ax bx cx dx si di bp ds es
     mov bp, sp
@@ -148,17 +190,22 @@ PrintRegs proc
 
 @@loop:
     mov si, bx
+    call PrintString                            ; Печатаем название регистра, находящееся в начале строки таблицы
+
+    mov si, offset EqualsSign
+    add di, (LABEL_STRING_LEN - 1d) * ROW_OFFSET
     call PrintString
 
-    mov si, [bx + LABEL_LENGTH]
-    and si, 00FFh
-    mov ax, [bp + si]
-    mov si, offset NumberBuffer
-
-    add di, 2d * ROW_OFFSET
+    mov si, [bx + LABEL_STRING_LEN]             ; Загружаем смещение исходного значения регистра 
+;                                                 относительно bp из таблицы
+    and si, 00FFh                               ; Обнуляем старший байт, который не относится к смещению 
+    mov ax, [bp + si]                           ; Загружаем исходное значение регистра
+    mov si, offset NumberBuffer                 
+    add di, (EQUALS_SIGN_STRING_LEN - 1d) * ROW_OFFSET
     call Itoa
     call PrintString
-    sub di, 2d * ROW_OFFSET
+
+    sub di, (LABEL_STRING_LEN + EQUALS_SIGN_STRING_LEN - 2d) * ROW_OFFSET
 
     add di, LINE_OFFSET
     add bx, REG_ENTRY_SIZE
@@ -170,9 +217,20 @@ PrintRegs proc
 PrintRegs endp
 
 
-; es - сегмент
-; di - смещение
-; si - адрес начала буфера
+; -----------------------------------------------------------------------------
+; PROC: PrintString
+; -----------------------------------------------------------------------------
+; Описание:
+;       Выводит в видеопамять по указанному адресу содержимое в буфере до терминанта ($)
+; Входные параметры:
+;       si - Указатель на буфер
+;       di - Смещение внутри указанного сегмента
+;       es - Указанный сегмент
+; Выходные параметры:
+;       Нет
+; Портящиеся регистры:
+;       Нет 
+; -----------------------------------------------------------------------------
 PrintString proc
     push si di
     mov ah, 00001111b
@@ -191,8 +249,19 @@ PrintString proc
 PrintString endp
 
 
-; ax - hex число
-; si - адрес начала буфера
+; -----------------------------------------------------------------------------
+; PROC: Itoa
+; -----------------------------------------------------------------------------
+; Описание:
+;       Записывает 16-ричное представление числа в виде строки в буфер  
+; Входные параметры:
+;       ax - Целое число
+;       bx - Указатель на буфер
+; Выходные параметры:
+;       Нет (Записывает в массив строковое представление числа в формате hex)
+; Портящиеся регистры:
+;       Нет 
+; -----------------------------------------------------------------------------
 Itoa proc
     push ax bx cx si
 
@@ -225,8 +294,20 @@ Itoa proc
 Itoa endp
 
 
+; -----------------------------------------------------------------------------
+; PROC: RestoreScreen
+; -----------------------------------------------------------------------------
+; Описание:
+;       Копирует содержимое экрана в буфер ScreenBuffer
+; Входные параметры:
+;       Нет
+; Выходные параметры:
+;       Нет
+; Портящиеся регистры:
+;       Нет 
+; -----------------------------------------------------------------------------
 SaveScreen proc
-    push si di ds es
+    push ax cx si di ds es
 
     mov ax, VIDEO_MEMORY_START
     mov ds, ax
@@ -240,13 +321,25 @@ SaveScreen proc
     cld
     rep movsb
 
-    pop es ds di si
+    pop es ds di si cx ax
     ret
 SaveScreen endp
 
 
+; -----------------------------------------------------------------------------
+; PROC: RestoreScreen
+; -----------------------------------------------------------------------------
+; Описание:
+;       Замещает содержимое экрана содержимым буфера ScreenBuffer      
+; Входные параметры:
+;       Нет
+; Выходные параметры:
+;       Нет
+; Портящиеся регистры:
+;       Нет 
+; -----------------------------------------------------------------------------
 RestoreScreen proc
-    push si di ds es
+    push ax cx si di ds es
 
     mov ax, cs
     mov ds, ax
@@ -260,7 +353,7 @@ RestoreScreen proc
     cld 
     rep movsb
 
-    pop es ds di si
+    pop es ds di si cx ax
     ret
 RestoreScreen endp
 
@@ -731,8 +824,11 @@ PrintSymbol endp
 Old09IntOffset      dw ?
 Old09IntSegment     dw ?
 
-IsVisible           db ?
+; Флаг, который равен FLAG_TRUE, если регистры выведены на экран и FLAG_FALSE, если не выведены
+IsVisible           db 0d
 
+; Таблица с строками-названиями регистров и смещением оригинальных
+; значений регистров относительно bp в функции PrintRegs 
 RegTable:
     db 'AX$', 16d
     db 'BX$', 14d
@@ -742,7 +838,13 @@ RegTable:
     db 'DI$', 6d
     db 'BP$', 4d
 
+EqualsSign          db ' = $'
+EQUALS_SIGN_STRING_LEN  equ 4d
+
+; Буфер для строкового представления числа
 NumberBuffer        db 4 DUP(?), '$'
+
+; Буфер для хранения содержимого окна
 ScreenBuffer        db SCREEN_BUFFER_SIZE DUP(?)
 
 ; Символы, использующиеся в рамке (Порядок важен)
