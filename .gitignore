@@ -1,5 +1,6 @@
 *
-!*/
-!*.asm
-!README.md
 !.gitignore
+!README.md
+!*.asm
+!images/
+!images/*
