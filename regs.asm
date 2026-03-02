@@ -8,42 +8,57 @@ locals @@
 ; CONSTANTS
 ; =============================================================================
 
+; Смещение 09h прерывания в сегменте 0000
 INTERRUPT_09_OFFSET         equ 36d
-STRING_BUFFER_SIZE          equ 128d
+; Сегмент видеопамяти
 VIDEO_MEMORY_START          equ 0B800h
+; Смещение начала аргументов командной строки в code segment
 SEGMENT_PREFIX_START        equ 80h
 
+; Горизонтальный размер окна
 SCREEN_SIZE_X               equ 80d
+; Вертикальный размер окна
 SCREEN_SIZE_Y               equ 25d
+; Горизонтальное смещение текста (Без учета рамки)(Левая граница)
 START_X                     equ 40d
-START_Y                     equ 12d
+; Вертикальное смещение текста (Без учета рамки)(Верхняя граница)
+START_Y                     equ 5d
 
+; В видеопамяти на 1 знакоместо приходится байт символа + байт аттрибута символа 
+; Соответственно на знакоместо приходится 2 байта 
 ROW_OFFSET                  equ 2d
+; Смещение между двумя соседними по вертикали знакоместами
 LINE_OFFSET                 equ SCREEN_SIZE_X * ROW_OFFSET
+; Смещение начала текста (Без учета рамки)(Левый верхний угол)
 PICTURE_OFFSET              equ (SCREEN_SIZE_X * START_Y + START_X) * ROW_OFFSET
+; Размер окна 
 SCREEN_BUFFER_SIZE          equ SCREEN_SIZE_X * SCREEN_SIZE_Y * ROW_OFFSET
 
+; Scan-код нажатой клавиши Alt
 ALT_PRESS                   equ 38h
+; Scan-код отпущенной клавиши Alt
 ALT_RELEASE                 equ ALT_PRESS + 80h
 
+; Установленный флаг
 FLAG_TRUE                   equ 1d
+; Неустановленный флаг
 FLAG_FALSE                  equ 0d
 
-REGISTER_COUNT              equ 7d
+; Размер записи в таблице
 REG_ENTRY_SIZE              equ 4d
+; Размер строки с именем регистра
 LABEL_STRING_LEN            equ 3d
+; Размер строки с знаком равенства
+EQUALS_SIGN_STRING_LEN      equ 4d
+; Высота текста
+TEXT_HEIGTH                 equ 14d
+; Ширина текста 
+TEXT_WIDTH                  equ (LABEL_STRING_LEN - 1d) + (EQUALS_SIGN_STRING_LEN - 1d) + 4d
 
-HORIZONTAL_FRAME_SIDE       equ 0CDh
-VERTICAL_FRAME_SIDE         equ 0BAh
-
-UPPER_LEFT_FRAME_CORNER     equ 0C9h
-UPPER_RIGHT_FRAME_CORNER    equ 0BBh
-LOWER_LEFT_FRAME_CORNER     equ 0C8h
-LOWER_RIGHT_FRAME_CORNER    equ 0BCh
-
-SYMBOL_ATTRIBUTE            equ 00000111b
-FRAME_ATTRIBUTE             equ 00001111b
-
+; Используемый атрибут символа текста
+SYMBOL_ATTRIBUTE            equ 00011111b
+; Используемый атрибут символа рамки
+FRAME_ATTRIBUTE             equ 00010111b
 
 
 ; =============================================================================
@@ -69,6 +84,8 @@ Start:
 ;       ax, bx, es
 ; -----------------------------------------------------------------------------
 Main proc
+        call ParseArguments
+
         xor ax, ax   
         mov es, ax                              ; Рассчитываем сегмент 09h прерывания
         mov bx, INTERRUPT_09_OFFSET             ; Рассчитываем смещение 09h прерывания
@@ -122,22 +139,27 @@ New09IntFunction proc
     jmp @@std_exit                              ; Прыгаем, если работаем не с клавишей Alt
 
 @@handle_press:
-    cmp [IsVisible], FLAG_TRUE
+    cmp cs:[IsVisible], FLAG_TRUE
     je @@hotkey_exit                            ; Если регистры выведены - пропустить повторный вывод
 
     pop ax
     push ax
     call SaveScreen                             ; Сохраняем старое окно
     call PrintRegs                              ; Выводим регистры
-    mov [IsVisible], FLAG_TRUE      
+    push FRAME_ATTRIBUTE
+    push TEXT_HEIGTH
+    push TEXT_WIDTH
+    call PrintFrame                             ; Выводим рамку
+
+    mov cs:[IsVisible], FLAG_TRUE      
     jmp @@hotkey_exit 
 
 @@handle_release:
-    cmp [IsVisible], FLAG_FALSE
+    cmp cs:[IsVisible], FLAG_FALSE
     je @@hotkey_exit                            ; Если регистры не выведены - пропускаем возврат содержимого окна
 
     call RestoreScreen                          ; Возврат содержимого окна
-    mov [IsVisible], FLAG_FALSE
+    mov cs:[IsVisible], FLAG_FALSE
     jmp @@hotkey_exit
 
 @@hotkey_exit:
@@ -173,10 +195,25 @@ New09IntFunction endp
 ; Портящиеся регистры:
 ;       Нет 
 ; -----------------------------------------------------------------------------
+; Визуализация стека после последнего push
+;|  FL   |  CS   |  IP   |  AX   |  RET  |  BP   |  SP   |  SS   |  ES   |  DS   |  BP   |  DI   |  SI   |  DX   |  CX   |  BX   |  AX   |
+;  34 33   32 31   30 29   28 27   26 25   24 23   22 21   20 19   18 17   16 15   14 13 | 12 11   10 09   08 07   06 05   04 03   02 01 | 00
+; -----------------------------------------------------------------------------          < BP HERE                                       < SP HERE
 PrintRegs proc
-    push ax bx cx dx si di bp ds es
+    push bp
     mov bp, sp
 
+    push ax
+    mov ax, bp
+    add ax, 12d                                 ; ax теперь имеет адрес оригинального SP (как перед прерыванием)
+
+    xchg ax, [bp - 2]                           ; ax принимает оригинальное значение, а SP занимает место [BP - 2]
+
+    push ss es ds
+    push [bp]                                   ; Пушим оригинальное значение BP
+    push di si dx cx bx ax
+
+    mov bp, sp
     mov ax, cs
     mov ds, ax
 
@@ -185,8 +222,7 @@ PrintRegs proc
 
     mov bx, offset RegTable
     mov di, PICTURE_OFFSET
-    mov cx, REGISTER_COUNT
-    jmp @@entry
+    mov cx, TEXT_HEIGTH
 
 @@loop:
     mov si, bx
@@ -194,7 +230,7 @@ PrintRegs proc
 
     mov si, offset EqualsSign
     add di, (LABEL_STRING_LEN - 1d) * ROW_OFFSET
-    call PrintString
+    call PrintString                            ; Печатаем знак равенства
 
     mov si, [bx + LABEL_STRING_LEN]             ; Загружаем смещение исходного значения регистра 
 ;                                                 относительно bp из таблицы
@@ -203,16 +239,18 @@ PrintRegs proc
     mov si, offset NumberBuffer                 
     add di, (EQUALS_SIGN_STRING_LEN - 1d) * ROW_OFFSET
     call Itoa
-    call PrintString
+    call PrintString                            ; Печатаем значение регистра 
 
     sub di, (LABEL_STRING_LEN + EQUALS_SIGN_STRING_LEN - 2d) * ROW_OFFSET
 
-    add di, LINE_OFFSET
-    add bx, REG_ENTRY_SIZE
-@@entry:
+    add di, LINE_OFFSET                         ; Смещаемся на строку ниже в видеопамяти
+    add bx, REG_ENTRY_SIZE                      ; Смещаемся на следующую строку в таблице с регистрами
+
     loop @@loop
 
-    pop es ds bp di si dx cx bx ax
+    pop ax bx cx dx si di bp ds es ss
+    add sp, 2
+    pop bp
     ret
 PrintRegs endp
 
@@ -233,16 +271,17 @@ PrintRegs endp
 ; -----------------------------------------------------------------------------
 PrintString proc
     push si di
-    mov ah, 00001111b
+    mov ah, SYMBOL_ATTRIBUTE                    ; Загружаем атрибут символов
     cld
 
 @@loop:
-    lodsb 
+    lodsb                                       ; AL = DS:[SI], SI += 1
     cmp al, '$'
     je @@exit
 
-    stosw    
+    stosw                                       ; ES:[DI] = AX, DI += 2
     jmp @@loop
+
 @@exit:
     pop di si
     ret
@@ -265,22 +304,22 @@ PrintString endp
 Itoa proc
     push ax bx cx si
 
-    mov cx, 4d
+    mov cx, 4d                                  ; Количество четверок байт в целом числе
 
 @@loop:
-    rol ax, 4
+    rol ax, 4                                   ; Циклический сдвиг влево
     mov bl, al
-    and bl, 0Fh
+    and bl, 0Fh                                 ; Оставляем только младшие 4 байта
 
-    cmp bl, 16d
-    jae @@end
+    ; cmp bl, 16d                                 
+    ; jae @@end                                  
     cmp bl, 10d
-    jae @@hexChars
-    add bl, '0'
+    jae @@hexChars                              ; Прыжок для обработки hex-символов ABCDEF
+    add bl, '0'                                 ; перевод числа в ascii-символ
     jmp @@end
 
 @@hexChars:
-    add bl, 'A' - 10d
+    add bl, 'A' - 10d                           ; Перевод hex-символа в ascii-символ
 
 @@end:
     mov [si], bl
@@ -288,7 +327,7 @@ Itoa proc
     loop @@loop
 
     mov bl, '$'
-    mov [si], bl
+    mov [si], bl                                ; Добавление терминанта
     pop si cx bx ax 
     ret
 Itoa endp
@@ -319,7 +358,7 @@ SaveScreen proc
 
     mov cx, SCREEN_BUFFER_SIZE
     cld
-    rep movsb
+    rep movsb                                   ; ES:[DI] = DS:[SI], DI++, SI++
 
     pop es ds di si cx ax
     ret
@@ -351,40 +390,11 @@ RestoreScreen proc
 
     mov cx, SCREEN_BUFFER_SIZE
     cld 
-    rep movsb
+    rep movsb                                   ; ES:[DI] = DS:[SI], DI++, SI++
 
     pop es ds di si cx ax
     ret
 RestoreScreen endp
-
-
-; -----------------------------------------------------------------------------
-; PROC: ClearScreen
-; -----------------------------------------------------------------------------
-; Описание: 
-;       Очищает терминал цветом из bh
-; Входные параметры:
-;       Нет
-; Выходные данные:
-;       Нет
-; Портящиеся регистры:
-;       ax, cx, dx
-; -----------------------------------------------------------------------------
-ClearScreen proc
-        push bp
-        mov bp, sp
-        push bx
-
-        mov ax, 0600h                           ; 06 - Номер функции и 00 - очистить все окно
-        mov bh, SYMBOL_ATTRIBUTE                ; Атрибут заполнения
-        mov cx, 0000h                           ; Верхний левый угол (Line:0, Row:0)
-        mov dx, 184Fh                           ; Нижний правый угол (Line:24, Row:79)
-        int 10h
-
-        pop bx
-        pop bp
-        ret
-ClearScreen endp
 
 
 ; -----------------------------------------------------------------------------
@@ -435,121 +445,13 @@ ParseArguments endp
 
 
 ; -----------------------------------------------------------------------------
-; PROC: ReadString (Pascal)
-; -----------------------------------------------------------------------------
-; Описание: 
-;       С помощью буферизированного ввода помещает пользовательский ввод в буфер
-; Входные параметры:
-;       [bp + 4] (Ptr) - Указатель на буфер строки
-; Выходные данные:
-;       Нет (Помещает пользовательский ввод в буфер)
-; Портящиеся регистры:
-;       ax, dx
-; -----------------------------------------------------------------------------
-ReadString proc
-        push bp                                 ; Сохраняем старый bp
-        mov bp, sp                              ; Создаем кадр стека
-
-        mov dx, [bp + 4]                        ; Загружаем адрес буфера
-        mov ah, 0Ah
-        int 21h                                 ; Системный вызов буферизированного ввода 
-
-        pop bp                                  ; Восстанавливаем старый bp
-        ret 2                                   ; Возвращаемся и очищаем стек
-ReadString endp
-
-
-; -----------------------------------------------------------------------------
-; PROC: DrawPicture (Cdecl)
-; -----------------------------------------------------------------------------
-; Описание: 
-;       Организует вывод рамки и текста в видеопамять, управляя координатами и атрибутами
-; Входные параметры:
-;       [bp + 8] (Word) - Атрибут рамки
-;       [bp + 6] (Word) - Атрибут текста
-;       [bp + 4] (Ptr)  - Указатель на буфер строки
-; Выходные данные:
-;       Нет (Рисует сразу в видеопамять)
-; Портящиеся регистры:
-;       ax
-; -----------------------------------------------------------------------------
-DrawPicture proc
-        push bp                                 ; Сохраняем старый bp
-        mov bp, sp                              ; Создаем кадр стека
-        push bx 
-
-        mov bx, [bp + 4]                        ; Сохраняем указатель на буфер
-
-        push bx                                 ; Передаем указатель на буфер в функцию
-        push [bp + 6]                           ; Передаем аттрибут символа в функцию
-        call PrintText
-
-        xor ax, ax
-        mov al, [bx + 1]                        ; Записываем длину записанной в буфер строки
-
-        push [bp + 8]                           ; Передаем аттрибут символа рамки
-        push ax
-        call PrintFrame
-
-        pop bx
-        pop bp                                  ; Восстанавливаем старый bp
-        ret                                     ; Возвращаемся и очищаем стек
-DrawPicture endp
-
-
-; -----------------------------------------------------------------------------
-; PROC: PrintText (Pascal)
-; -----------------------------------------------------------------------------
-; Описание: 
-;       Выводит текст из буфера в видеопамять
-; Входные параметры:
-;       [bp + 6] (Ptr)  - Указатель на буфер строки
-;       [bp + 4] (Word) - Атрибут текста
-; Выходные данные:
-;       Нет (Рисует сразу в видеопамять)
-; Портящиеся регистры:
-;       ax, cx, dx
-; -----------------------------------------------------------------------------
-PrintText proc
-        push bp                                 ; Сохраняем старый bp
-        mov bp, sp                              ; Создаем кадр стека
-        push bx si di es
-        
-        mov ax, VIDEO_MEMORY_START              ; Устанавливаем начало сегмента видеопамяти
-        mov es, ax	                        ; Загружаем указатель на начало области видеопамяти
-        mov di, PICTURE_OFFSET                  ; Загружаем смещение для вывода текста
-
-        mov bx, [bp + 6]                        ; Загружаем указатель на начало буфера
-        mov dx, [bp + 4]                        ; Загружаем аттрибут символа
-
-        xor cx, cx                              ; Обнуляем cx
-        lea si, [bx + 2]                        ; Загружаем адрес начала строки 
-        mov cl, [bx + 1]                        ; Загружаем количество символов в строке
-
-        jcxz @@exit                             ; Если cx > 0, то заходим в цикл
-@@loop: 
-        mov al, [si]                            
-        mov ah, dl
-        mov es:[di], ax                         ; Загружаем в видеопамять символ и его аттрибут
-
-        inc si                                  ; Смещаемся к следующему символу строки
-        add di, ROW_OFFSET                      ; Смещаемся на 2 байта в видеопамяти
-        loop @@loop                             ; Повторяем вывод символа
-
-@@exit: 
-        pop es di si bx
-        pop bp                                  ; Восстанавливаем старый bp
-        ret 4                                   ; Возвращаемся и очищаем стек
-PrintText endp
-
-
-; -----------------------------------------------------------------------------
 ; PROC: PrintFrame (Pascal)
 ; -----------------------------------------------------------------------------
 ; Описание: 
 ;       Организует вывод частей рамки в видеопамять
 ; Входные параметры:
 ;       [bp + 6] (Word) - Атрибут рамки
+;       [bp + 6] (Word) - Высота текста
 ;       [bp + 4] (Word) - Длина текста
 ; Выходные данные:
 ;       Нет (Рисует сразу в видеопамять)
@@ -559,26 +461,33 @@ PrintText endp
 PrintFrame proc
         push bp                                 ; Сохраняем старый bp
         mov bp, sp                              ; Создаем кадр стека
-        push si di
+        push ax cx dx si di ds
 
-        mov si, [bp + 6]                        ; Загружаем аттрибут символа рамки
+        push cs
+        pop ds
+
+        mov dx, [bp + 8]                        ; Загружаем атрибут символа рамки
+        mov si, [bp + 6]                        ; Загружаем высоту текста внутри рамки
         mov di, [bp + 4]                        ; Загружаем ширину текста внутри рамки
 
+        push dx
         push si
         push di
         call PrintVerticalFrameSide
 
+        push dx
         push si
         push di
         call PrintHorizontalFrameSide
 
+        push dx
         push si
         push di
         call printFrameCorners
 
-        pop di si
+        pop ds di si dx cx ax
         pop bp                                  ; Восстанавливаем старый bp
-        ret 4                                   ; Возвращаемся и очищаем стек
+        ret 6                                   ; Возвращаемся и очищаем стек
 PrintFrame endp
 
 
@@ -588,46 +497,50 @@ PrintFrame endp
 ; Описание: 
 ;       Выводит вертикальные части рамки в видеопамять
 ; Входные параметры:
-;       [bp + 6] (Word) - Атрибут рамки
+;       [bp + 8] (Word) - Атрибут рамки
+;       [bp + 6] (Word) - Высота текста
 ;       [bp + 4] (Word) - Длина текста
 ; Выходные данные:
 ;       Нет (Рисует сразу в видеопамять)
 ; Портящиеся регистры:
-;       ax
+;       ax, dx
 ; -----------------------------------------------------------------------------
 PrintVerticalFrameSide proc
         push bp                                 ; Сохраняем старый bp
         mov bp, sp                              ; Создаем кадр стека
         push bx si di
 
-        mov si, [bp + 6]                        ; Загружаем аттрибут символа рамки
+        mov dx, [bp + 8]                        ; Загружаем атрибут символа рамки
+        mov si, [bp + 6]                        ; Загружаем высоту текста внутри рамки
         mov di, [bp + 4]                        ; Загружаем ширину текста внутри рамки
 
         xor bx, bx
         mov bl, [FrameChars + I_VERT]           ; Загружаем символ вертикальной части рамки
         push bx
-        push si
+        push dx
         push PICTURE_OFFSET - ROW_OFFSET
         push LINE_OFFSET
-        push 1d                                
-        call PrintSymbolSequence                ; Печатаем часть рамки над текстом  
+        push si                       
+        call PrintSymbolSequence                ; Печатаем часть слева от текста
 
+        push dx
         mov ax, ROW_OFFSET
         mul di
         add ax, PICTURE_OFFSET                  ; Находим смещение для правой стороны рамки
+        pop dx
 
         xor bx, bx
         mov bl, [FrameChars + I_VERT]           ; Загружаем символ вертикальной части рамки
         push bx
-        push si
+        push dx
         push ax
         push LINE_OFFSET
-        push 1d
-        call PrintSymbolSequence                ; Печатаем часть рамки под текстом
+        push si
+        call PrintSymbolSequence                ; Печатаем часть рамки справа от текста
 
         pop di si bx
         pop bp
-        ret 4
+        ret 6
 PrintVerticalFrameSide endp
 
 
@@ -637,25 +550,27 @@ PrintVerticalFrameSide endp
 ; Описание: 
 ;       Выводит горизонтальные части рамки в видеопамять
 ; Входные параметры:
-;       [bp + 6] (Word) - Атрибут рамки
+;       [bp + 8] (Word) - Атрибут рамки
+;       [bp + 6] (Word) - Высота текста
 ;       [bp + 4] (Word) - Длина текста
 ; Выходные данные:
 ;       Нет (Рисует сразу в видеопамять)
 ; Портящиеся регистры:
-;       ax
+;       ax, dx
 ; -----------------------------------------------------------------------------
 PrintHorizontalFrameSide proc
         push bp                                 ; Сохраняем старый bp
         mov bp, sp                              ; Создаем кадр стека
         push si di
 
-        mov si, [bp + 6]                        ; Загружаем аттрибут символа рамки
+        mov dx, [bp + 8]                        ; Загружаем атрибут символа рамки
+        mov si, [bp + 6]                        ; Загружаем высоту текста внутри рамки
         mov di, [bp + 4]                        ; Загружаем ширину текста внутри рамки
 
         xor ax, ax
         mov al, [FrameChars + I_HORIZ]          ; Загружаем символ горизонтальной части рамки
         push ax
-        push si
+        push dx
         push PICTURE_OFFSET - LINE_OFFSET
         push ROW_OFFSET
         push di
@@ -664,15 +579,22 @@ PrintHorizontalFrameSide proc
         xor ax, ax
         mov al, [FrameChars + I_HORIZ]          ; Загружаем символ горизонтальной части рамки
         push ax
-        push si
-        push PICTURE_OFFSET + LINE_OFFSET
+        push dx
+
+        push dx
+        mov ax, LINE_OFFSET
+        mul si
+        add ax, PICTURE_OFFSET                 
+        pop dx 
+
+        push ax                                 ; push PICTURE_OFFSET + LINE_OFFSET * SI 
         push ROW_OFFSET
         push di
         call PrintSymbolSequence                ; Печатаем часть рамки под текстом
 
         pop di si
         pop bp
-        ret 4
+        ret 6
 
 PrintHorizontalFrameSide endp
 
@@ -683,60 +605,77 @@ PrintHorizontalFrameSide endp
 ; Описание: 
 ;       Выводит угловые части рамки в видеопамять
 ; Входные параметры:
-;       [bp + 6] (Word) - Атрибут рамки
+;       [bp + 8] (Word) - Атрибут рамки
+;       [bp + 6] (Word) - Высота текста
 ;       [bp + 4] (Word) - Длина текста
 ; Выходные данные:
 ;       Нет (Рисует сразу в видеопамять)
 ; Портящиеся регистры:
-;       ax
+;       ax, dx
 ; -----------------------------------------------------------------------------
 PrintFrameCorners proc
         push bp                                 ; Сохраняем старый bp
         mov bp, sp                              ; Создаем кадр стека
         push bx si di
 
-        mov si, [bp + 6]                        ; Загружаем аттрибут символа рамки
+        mov dx, [bp + 8]                        ; Загружаем атрибут символа рамки
+        mov si, [bp + 6]                        ; Загружаем высоту текста внутри рамки
         mov di, [bp + 4]                        ; Загружаем ширину текста внутри рамки
 
         xor ax, ax
         mov al, [FrameChars + I_UP_LEFT]        ; Загружаем символ верхнего левого угла рамки
         push ax
-        push si
+        push dx
         push PICTURE_OFFSET - LINE_OFFSET - ROW_OFFSET
         call PrintSymbol
 
         xor ax, ax
         mov al, [FrameChars + I_LOW_LEFT]       ; Загружаем символ нижнего левого угла рамки
         push ax
-        push si
-        push PICTURE_OFFSET + LINE_OFFSET - ROW_OFFSET
+        push dx
+
+        push dx
+        mov ax, LINE_OFFSET
+        mul si
+        add ax, PICTURE_OFFSET - ROW_OFFSET
+        pop dx
+
+        push ax                                 ; PUSH PICTURE_OFFSET + LINE_OFFSET * SI - ROW_OFFSET
         call PrintSymbol
 
+        push dx
         mov ax, ROW_OFFSET
         mul di
-        add ax, PICTURE_OFFSET - LINE_OFFSET    ; Находим смещение для правого верхнего угла рамки
+        add ax, PICTURE_OFFSET - LINE_OFFSET 
+        pop dx
 
         xor bx, bx
         mov bl, [FrameChars + I_UP_RIGHT]       ; Загружаем символ верхнего правого угла рамки
         push bx
-        push si
+        push dx
         push ax
         call PrintSymbol 
 
+        push dx
         mov ax, ROW_OFFSET
         mul di
-        add ax, PICTURE_OFFSET + LINE_OFFSET    ; Находим смещение для правого нижнего угла рамки
+        mov bx, ax                              ; BX = ROW_OFFSET * DI
+        mov ax, LINE_OFFSET
+        mul si
+        add ax, bx                              
+        add ax, PICTURE_OFFSET                  ; AX = PICTURE_OFFSET + ROW_OFFSET * DI + LINE_OFFSET * SI
+        pop dx   
 
         xor bx, bx
         mov bl, [FrameChars + I_LOW_RIGHT]      ; Загружаем символ нижнего правого угла рамки
         push bx
-        push si
+        push dx
         push ax
         call PrintSymbol
 
         pop di si bx
         pop bp
-        ret 4
+        ret 6
 PrintFrameCorners endp 
 
 
@@ -765,14 +704,14 @@ PrintSymbolSequence proc
         mov es, ax                              ; Загружаем указатель на начало области видеопамяти
 
         mov al, [bp + 12]                       ; Загружаем символ рамки
-        mov ah, [bp + 10]                       ; Загружаем аттрибут символа рамки
+        mov ah, [bp + 10]                       ; Загружаем атрибут символа рамки
         mov di, [bp + 8]                        ; Загружаем начальное смещение в области видеопамяти
         mov si, [bp + 6]                        ; Загружаем шаг увеличения адреса при итерации
         mov cx, [bp + 4]                        ; Загружаем количество итераций цикла 
 
         jcxz @@exit
 @@loop:
-        mov es:[di], ax                         ; Загружаем в видеопамять символ и его аттрибут
+        mov es:[di], ax                         ; Загружаем в видеопамять символ и его атрибут
         add di, si                              ; Изменяем смещение на заданную величину si
         loop @@loop                             ; Повторяем итерацию
 @@exit:
@@ -806,10 +745,10 @@ PrintSymbol proc
         mov es, ax                              ; Загружаем указатель на начало области видеопамяти
 
         mov al, [bp + 8]                        ; Загружаем символ рамки
-        mov ah, [bp + 6]                        ; Загружаем аттрибут символа рамки
+        mov ah, [bp + 6]                        ; Загружаем атрибут символа рамки
         mov di, [bp + 4]                        ; Загружаем начальное смещение в области видеопамяти
 
-        mov es:[di], ax                         ; Загружаем в видеопамять символ и его аттрибут
+        mov es:[di], ax                         ; Загружаем в видеопамять символ и его атрибут
 
         pop es di
         pop bp 
@@ -821,7 +760,9 @@ PrintSymbol endp
 ; VARIABLES
 ; =============================================================================
 
+; Переменная, хранящая смещение стандартной функции 09h прерывания
 Old09IntOffset      dw ?
+; Переменная, хранящаа сегмент стандартной функции 09h прерывания
 Old09IntSegment     dw ?
 
 ; Флаг, который равен FLAG_TRUE, если регистры выведены на экран и FLAG_FALSE, если не выведены
@@ -830,16 +771,22 @@ IsVisible           db 0d
 ; Таблица с строками-названиями регистров и смещением оригинальных
 ; значений регистров относительно bp в функции PrintRegs 
 RegTable:
-    db 'AX$', 16d
-    db 'BX$', 14d
-    db 'CX$', 12d
-    db 'DX$', 10d
+    db 'AX$', 0d
+    db 'BX$', 2d
+    db 'CX$', 4d
+    db 'DX$', 6d
     db 'SI$', 8d
-    db 'DI$', 6d
-    db 'BP$', 4d
+    db 'DI$', 10d
+    db 'BP$', 12d
+    db 'SP$', 20d
+    db 'DS$', 14d
+    db 'ES$', 16d
+    db 'SS$', 18d
+    db 'CS$', 30d
+    db 'IP$', 28d
+    db 'FL$', 32d
 
 EqualsSign          db ' = $'
-EQUALS_SIGN_STRING_LEN  equ 4d
 
 ; Буфер для строкового представления числа
 NumberBuffer        db 4 DUP(?), '$'
@@ -857,13 +804,22 @@ FrameChars db UPPER_LEFT_FRAME_CORNER,  \  ; index - [0]
               LOWER_LEFT_FRAME_CORNER,  \  ; index - [4]
               LOWER_RIGHT_FRAME_CORNER     ; index - [5]
 
-FRAME_CHARS_COUNT       equ $ - FrameChars
-I_UP_LEFT               equ 0d 
-I_HORIZ                 equ 1d 
-I_UP_RIGHT              equ 2d 
-I_VERT                  equ 3d 
-I_LOW_LEFT              equ 4d
-I_LOW_RIGHT             equ 5d
+; Смещение символов рамки в массиве
+FRAME_CHARS_COUNT           equ $ - FrameChars
+I_UP_LEFT                   equ 0d 
+I_HORIZ                     equ 1d 
+I_UP_RIGHT                  equ 2d 
+I_VERT                      equ 3d 
+I_LOW_LEFT                  equ 4d
+I_LOW_RIGHT                 equ 5d
+
+; ascii-коды для символов рамки
+HORIZONTAL_FRAME_SIDE       equ 0CDh
+VERTICAL_FRAME_SIDE         equ 0BAh
+UPPER_LEFT_FRAME_CORNER     equ 0C9h
+UPPER_RIGHT_FRAME_CORNER    equ 0BBh
+LOWER_LEFT_FRAME_CORNER     equ 0C8h
+LOWER_RIGHT_FRAME_CORNER    equ 0BCh
 
 
 EndOfProgram:
