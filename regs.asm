@@ -410,8 +410,8 @@ RestoreScreen endp
 ;       ax, cx
 ; -----------------------------------------------------------------------------
 ParseArguments proc
-        push bp                                 ; Сохраняем старый bp
-        mov bp, sp                              ; Создаем кадр стека
+        push bp                                
+        mov bp, sp                             
         push si di
 
         mov si, SEGMENT_PREFIX_START            ; Загружаем адрес длины строки аргументов
@@ -439,8 +439,8 @@ ParseArguments proc
 
 @@exit:
         pop di si
-        pop bp                                  ; Восстанавливаем старый bp
-        ret                                     ; Возвращаемся и очищаем стек
+        pop bp                                 
+        ret                                  
 ParseArguments endp
 
 
@@ -459,8 +459,8 @@ ParseArguments endp
 ;       Нет
 ; -----------------------------------------------------------------------------
 PrintFrame proc
-        push bp                                 ; Сохраняем старый bp
-        mov bp, sp                              ; Создаем кадр стека
+        push bp                                
+        mov bp, sp                           
         push ax cx dx si di ds
 
         push cs
@@ -486,8 +486,8 @@ PrintFrame proc
         call printFrameCorners
 
         pop ds di si dx cx ax
-        pop bp                                  ; Восстанавливаем старый bp
-        ret 6                                   ; Возвращаемся и очищаем стек
+        pop bp                               
+        ret 6                                  
 PrintFrame endp
 
 
@@ -506,8 +506,8 @@ PrintFrame endp
 ;       ax, dx
 ; -----------------------------------------------------------------------------
 PrintVerticalFrameSide proc
-        push bp                                 ; Сохраняем старый bp
-        mov bp, sp                              ; Создаем кадр стека
+        push bp                                 
+        mov bp, sp                              
         push bx si di
 
         mov dx, [bp + 8]                        ; Загружаем атрибут символа рамки
@@ -559,8 +559,8 @@ PrintVerticalFrameSide endp
 ;       ax, dx
 ; -----------------------------------------------------------------------------
 PrintHorizontalFrameSide proc
-        push bp                                 ; Сохраняем старый bp
-        mov bp, sp                              ; Создаем кадр стека
+        push bp                               
+        mov bp, sp                           
         push si di
 
         mov dx, [bp + 8]                        ; Загружаем атрибут символа рамки
@@ -614,8 +614,8 @@ PrintHorizontalFrameSide endp
 ;       ax, dx
 ; -----------------------------------------------------------------------------
 PrintFrameCorners proc
-        push bp                                 ; Сохраняем старый bp
-        mov bp, sp                              ; Создаем кадр стека
+        push bp                               
+        mov bp, sp                           
         push bx si di
 
         mov dx, [bp + 8]                        ; Загружаем атрибут символа рамки
@@ -696,8 +696,8 @@ PrintFrameCorners endp
 ;       ax, cx
 ; -----------------------------------------------------------------------------
 PrintSymbolSequence proc
-        push bp                                 ; Сохраняем старый bp
-        mov bp, sp                              ; Создаем кадр стека
+        push bp                               
+        mov bp, sp                           
         push si di es
 
         mov ax, VIDEO_MEMORY_START              
@@ -737,8 +737,8 @@ PrintSymbolSequence endp
 ;       ax
 ; -----------------------------------------------------------------------------
 PrintSymbol proc 
-        push bp                                 ; Сохраняем старый bp
-        mov bp, sp                              ; Создаем кадр стека
+        push bp                                
+        mov bp, sp                           
         push di es
 
         mov ax, VIDEO_MEMORY_START
